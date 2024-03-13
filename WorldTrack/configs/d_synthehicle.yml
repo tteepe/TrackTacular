@@ -1,0 +1,14 @@
+data:
+  class_path: datasets.SynthehicleDataModule
+  init_args:
+    data_dir: "/usr/home/tee/Developer/datasets/synthehicle"
+model:
+  resolution: [150, 4, 150]  # Y,Z,X
+  bounds: [-75, 75, -75, 75, 0, 2]  # xmin,xmax,ymin,ymax,zmin,zmax
+  depth: [32, 0, 96]
+  z_sign: 1
+  num_classes: 3
+  encoder_name: 'res50'
+trainer:
+  max_epochs: 4
+  accumulate_grad_batches: 8

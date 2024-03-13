@@ -1,0 +1,12 @@
+data:
+  class_path: datasets.PedestrianDataModule
+  init_args:
+    data_dir: "/usr/home/tee/Developer/datasets/MultiviewX"
+model:
+  resolution: [160, 2, 250]  # Y,Z,X
+  bounds: [0, 1000, 0, 640, 0, 2]  # xmin,xmax,ymin,ymax,zmin,zmax
+  depth: [32, 0, -20]
+  z_sign: -1
+  num_cameras: 6
+trainer:
+  max_epochs: 50

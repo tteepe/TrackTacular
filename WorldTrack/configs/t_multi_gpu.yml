@@ -1,0 +1,10 @@
+trainer:
+  accelerator: gpu
+  devices: 2
+  strategy:
+    class_path: lightning.pytorch.strategies.DDPStrategy
+    init_args:
+      find_unused_parameters: True
+data:
+  init_args:
+    num_workers: 16
