@@ -6,6 +6,7 @@ def eye_4x4(B, device='cuda'):
     rt = torch.eye(4, device=torch.device(device)).view(1, 4, 4).repeat([B, 1, 1])
     return rt
 
+
 def apply_4x4(RT, xyz):
     B, N, _ = list(xyz.shape)  # N 8 4
     ones = torch.ones_like(xyz[:, :, 0:1])
@@ -18,22 +19,24 @@ def apply_4x4(RT, xyz):
     xyz2 = xyz2[:, :, :3]
     return xyz2
 
-def safe_inverse(a): #parallel version
+
+def safe_inverse(a):  # parallel version
     B, _, _ = list(a.shape)
     inv = a.clone()
-    r_transpose = a[:, :3, :3].transpose(1,2) #inverse of rotation matrix
+    r_transpose = a[:, :3, :3].transpose(1, 2)  # inverse of rotation matrix
 
     inv[:, :3, :3] = r_transpose
     inv[:, :3, 3:4] = -torch.matmul(r_transpose, a[:, :3, 3:4])
 
     return inv
 
+
 def safe_inverse_single(a):
     r, t = split_rt_single(a)
-    t = t.view(3,1)
+    t = t.view(3, 1)
     r_transpose = r.t()
     inv = torch.cat([r_transpose, -torch.matmul(r_transpose, t)], 1)
-    bottom_row = a[3:4, :] # this is [0, 0, 0, 1]
+    bottom_row = a[3:4, :]  # this is [0, 0, 0, 1]
     # bottom_row = torch.tensor([0.,0.,0.,1.]).view(1,4)
     inv = torch.cat([inv, bottom_row], 0)
     return inv

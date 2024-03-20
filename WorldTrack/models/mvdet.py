@@ -49,7 +49,7 @@ class MVDet(nn.Module):
             self.encoder = Encoder_eff(self.feat2d_dim, version='b4')
 
         if self.num_cameras is not None:
-            self.bev_compressor = nn.Sequential(
+            self.cam_compressor = nn.Sequential(
                 nn.Conv2d(feat2d_dim * self.num_cameras, latent_dim, kernel_size=3, padding=1, stride=1),
                 nn.InstanceNorm2d(latent_dim), nn.ReLU(),
                 nn.Conv2d(latent_dim, latent_dim, kernel_size=1),
@@ -112,8 +112,8 @@ class MVDet(nn.Module):
         proj_mats = mem_T_featpix  # B*S,3,3
 
         # B*S,latent_dim,Y,X
-        bev_features_ = warp_perspective(feat_cams_, proj_mats, (self.Y, self.X), align_corners=False)
-        bev_features = __u(bev_features_)  # B,S,latent_dim,Y,X
+        feat_mems_ = warp_perspective(feat_cams_, proj_mats, (self.Y, self.X), align_corners=False)
+        feat_mems = __u(feat_mems_)  # B,S,latent_dim,Y,X
 
         # bev_img_ = warp_perspective(rgb_cams_, proj_mats, (self.Y, self.X), align_corners=False)
         # bev_img = __u(bev_img_)
@@ -121,15 +121,15 @@ class MVDet(nn.Module):
         # plt.imshow(bev_img[0, :, :, 0].permute(1, 2, 0).cpu())
         # plt.show()
 
-        bev_features = bev_features.permute(0, 2, 1, 3, 4)
         if self.num_cameras is None:
-            bev_features = bev_features.amax(2)
+            mask_mems = (torch.abs(feat_mems) > 0).float()
+            feat_mem = utils.basic.reduce_masked_mean(feat_mems, mask_mems, dim=1)  # B, C, Z, Y, X
         else:
-            bev_features = self.bev_compressor(bev_features.flatten(1,2))
+            feat_mem = self.cam_compressor(feat_mems.flatten(1, 2))
 
         if prev_bev is None:
-            prev_bev = bev_features
-        bev_features = torch.cat([bev_features, prev_bev], dim=1)
+            prev_bev = feat_mem
+        bev_features = torch.cat([feat_mem, prev_bev], dim=1)
         bev_features = self.temporal_bev(bev_features)
 
         out_dict = self.decoder(bev_features, feat_cams_,

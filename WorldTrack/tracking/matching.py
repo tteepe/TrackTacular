@@ -99,22 +99,14 @@ def center_distance(atracks, btracks):
     :rtype cost_matrix np.ndarray
     """
 
-    if (len(atracks) > 0 and isinstance(atracks[0], np.ndarray)) or (
-            len(btracks) > 0 and isinstance(btracks[0], np.ndarray)):
-        axyahs = atracks
-        bxyahs = btracks
-    else:
-        axyahs = [track.to_xyah() for track in atracks]
-        bxyahs = [track.to_xyah() for track in btracks]
+    cost_matrix = np.zeros((len(atracks), len(btracks)), dtype=np.float32)
+    if cost_matrix.size == 0:
+        return cost_matrix
 
-    cost_matrix = np.zeros((len(axyahs), len(bxyahs)), dtype=np.float32)
+    atracks = np.stack(atracks)
+    btracks = np.stack(btracks)
 
-    for i in range(0, len(axyahs)):
-        for j in range(0, len(bxyahs)):
-            center_a = axyahs[i][:2]
-            center_b = bxyahs[j][:2]
-            d = center_b - center_a
-            cost_matrix[i][j] = np.sqrt(np.sum(d * d, axis=0))
+    cost_matrix = cdist(atracks, btracks, 'euclidean')
 
     return cost_matrix
 

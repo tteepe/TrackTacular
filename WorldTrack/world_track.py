@@ -1,5 +1,4 @@
 import os.path as osp
-
 import torch
 import lightning as pl
 import matplotlib.pyplot as plt
@@ -59,14 +58,16 @@ class WorldTrackModel(pl.LightningModule):
         self.test_tracker = JDETracker(conf_thres=self.conf_threshold)
 
         # Model
+        num_cameras = None if num_cameras == 0 else num_cameras
         if model_name == 'segnet':
-            self.model = Segnet(self.Y, self.Z, self.X,
+            self.model = Segnet(self.Y, self.Z, self.X, num_cameras=num_cameras, feat2d_dim=feat2d_dim,
                                 encoder_type=self.encoder_name, num_classes=num_classes, z_sign=z_sign)
         elif model_name == 'liftnet':
             self.model = Liftnet(self.Y, self.Z, self.X, encoder_type=self.encoder_name, feat2d_dim=feat2d_dim,
-                                 DMIN=self.DMIN, DMAX=self.DMAX, D=self.D, num_classes=num_classes, z_sign=z_sign)
+                                 DMIN=self.DMIN, DMAX=self.DMAX, D=self.D, num_classes=num_classes, z_sign=z_sign,
+                                 num_cameras=num_cameras)
         elif model_name == 'bevformer':
-            self.model = Bevformernet(self.Y, self.Z, self.X,
+            self.model = Bevformernet(self.Y, self.Z, self.X, feat2d_dim=feat2d_dim,
                                       encoder_type=self.encoder_name, num_classes=num_classes, z_sign=z_sign)
         elif model_name == 'mvdet':
             self.model = MVDet(self.Y, self.Z, self.X, encoder_type=self.encoder_name,
@@ -99,7 +100,7 @@ class WorldTrackModel(pl.LightningModule):
         )
 
         if self.use_temporal_cache:
-            self.store_cache(item['frame'].cpu(), output['bev_feat'].clone().detach())
+            self.store_cache(item['frame'].cpu(), output['bev_raw'].clone().detach())
 
         return output
 
@@ -147,7 +148,7 @@ class WorldTrackModel(pl.LightningModule):
         B, S = target['center_img'].shape[:2]
         center_img_g = basic.pack_seqdim(target['center_img'], B)
 
-        center_loss = self.center_loss_fn(basic._sigmoid(center_e), center_g)
+        center_loss = self.center_loss_fn(basic.sigmoid(center_e), center_g)
         offset_loss = torch.abs(offset_e[:, :2] - offset_g[:, :2]).sum(dim=1, keepdim=True)
         offset_loss = basic.reduce_masked_mean(offset_loss, valid_g)
         tracking_loss = torch.nn.functional.smooth_l1_loss(
@@ -186,7 +187,7 @@ class WorldTrackModel(pl.LightningModule):
         tracking_uncertainty_loss = self.model.tracking_weight
 
         # img loss
-        center_img_loss = self.center_loss_fn(basic._sigmoid(center_img_e), center_img_g) / S
+        center_img_loss = self.center_loss_fn(basic.sigmoid(center_img_e), center_img_g) / S
 
         loss_dict = {
             'center_loss': 10 * center_loss,
@@ -211,7 +212,7 @@ class WorldTrackModel(pl.LightningModule):
             'size_uncertainty_loss': size_uncertainty_loss,
             'rot_uncertainty_loss': rot_uncertainty_loss,
         }
-        total_loss = sum(loss_weight_dict.values())  + sum(stats_dict.values())
+        total_loss = sum(loss_weight_dict.values()) + sum(stats_dict.values())
 
         return total_loss, loss_dict
 
@@ -262,37 +263,36 @@ class WorldTrackModel(pl.LightningModule):
         )
 
         mem_xyz = torch.cat((xy_e, torch.zeros_like(xy_e[..., 0:1])), dim=2)
-        ref_xyz = self.vox_util.Mem2Ref(mem_xyz, self.Y, self.Z, self.X)
+        ref_xy = self.vox_util.Mem2Ref(mem_xyz, self.Y, self.Z, self.X)[..., :2]
 
         mem_xyz_prev = torch.cat((xy_prev_e, torch.zeros_like(xy_e[..., 0:1])), dim=2)
-        ref_xyz_prev = self.vox_util.Mem2Ref(mem_xyz_prev, self.Y, self.Z, self.X)
+        ref_xy_prev = self.vox_util.Mem2Ref(mem_xyz_prev, self.Y, self.Z, self.X)[..., :2]
 
-        if 'grid_gt' in item:
-            # moda & modp
-            for frame, grid_gt, xyz, score in zip(item['frame'], item['grid_gt'], ref_xyz, scores_e):
-                frame = int(frame.item())
-                valid = score > self.conf_threshold
+        # detection
+        for frame, grid_gt, xy, score in zip(item['frame'], item['grid_gt'], ref_xy, scores_e):
+            frame = int(frame.item())
+            valid = score > self.conf_threshold
 
-                self.moda_gt_list.extend([[frame, x.item(), y.item()] for x, y, _ in grid_gt[grid_gt.sum(1) != 0]])
-                self.moda_pred_list.extend([[frame, x.item(), y.item()] for x, y, _ in xyz[valid]])
+            self.moda_gt_list.extend([[frame, x.item(), y.item()] for x, y, _ in grid_gt[grid_gt.sum(1) != 0]])
+            self.moda_pred_list.extend([[frame, x.item(), y.item()] for x, y in xy[valid]])
 
-            # mota
-            bev_dets = torch.cat((ref_xyz_prev[..., :2], torch.ones_like(ref_xyz[..., :2])), dim=2).cpu()
-            for seq_num, frame, grid_gt, bev_det, score, bev_prev \
-                    in zip(item['sequence_num'], item['frame'], item['grid_gt'], bev_dets.cpu(), scores_e.cpu(),
-                           ref_xyz_prev.cpu()):
-                frame = int(frame.item())
-                output_stracks = self.test_tracker.update(bev_det, score, bev_prev)
-                self.mota_gt_list.extend([[seq_num.item(), frame, i.item(), -1, -1, -1, -1, 1, x.item(),  y.item(), -1]
-                                          for x, y, i in grid_gt[grid_gt.sum(1) != 0]])
-                self.mota_pred_list.extend([[seq_num.item(), frame, s.track_id, -1, -1, -1, -1, s.score.item()]
-                                            + s.tlwh.tolist()[:2] + [-1]
-                                            for s in output_stracks])
+        # tracking
+        for seq_num, frame, grid_gt, bev_det, bev_prev, score, in (
+                zip(item['sequence_num'], item['frame'], item['grid_gt'], ref_xy.cpu(), ref_xy_prev.cpu(),
+                    scores_e.cpu())):
+            frame = int(frame.item())
+            output_stracks = self.test_tracker.update(bev_det, bev_prev, score)
+
+            self.mota_gt_list.extend([[seq_num.item(), frame, i.item(), -1, -1, -1, -1, 1, x.item(),  y.item(), -1]
+                                      for x, y, i in grid_gt[grid_gt.sum(1) != 0]])
+            self.mota_pred_list.extend([[seq_num.item(), frame, s.track_id, -1, -1, -1, -1, s.score.item()]
+                                        + s.xy.tolist() + [-1]
+                                        for s in output_stracks])
 
     def on_test_epoch_end(self):
         log_dir = self.trainer.log_dir if self.trainer.log_dir is not None else '../data/cache'
 
-        # moda & modp
+        # detection
         pred_path = osp.join(log_dir, 'moda_pred.txt')
         gt_path = osp.join(log_dir, 'moda_gt.txt')
         np.savetxt(pred_path, np.array(self.moda_pred_list), '%f')
@@ -303,7 +303,7 @@ class WorldTrackModel(pl.LightningModule):
         self.log(f'detect/moda', moda)
         self.log(f'detect/modp', modp)
 
-        # mota
+        # tracking
         scale = 1 if self.X == 150 else 0.025  # HACK
         pred_path = osp.join(log_dir, 'mota_pred.txt')
         gt_path = osp.join(log_dir, 'mota_gt.txt')

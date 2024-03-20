@@ -5,7 +5,7 @@ from PIL import Image
 EPS = 1e-6
 
 
-def _sigmoid(x):
+def sigmoid(x):
     return torch.clamp(torch.sigmoid(x), min=1e-4, max=1 - 1e-4)
 
 

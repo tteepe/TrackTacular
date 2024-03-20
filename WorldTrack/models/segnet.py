@@ -16,6 +16,7 @@ class Segnet(nn.Module):
                  latent_dim=256,
                  feat2d_dim=128,
                  num_classes=None,
+                 num_cameras=None,
                  z_sign=1,
                  encoder_type='swin_t',
                  device=torch.device('cuda')):
@@ -28,6 +29,7 @@ class Segnet(nn.Module):
         self.latent_dim = latent_dim
         self.encoder_type = encoder_type
         self.z_sign = z_sign
+        self.num_cameras = num_cameras
 
         self.mean = torch.as_tensor([0.485, 0.456, 0.406], device=device).reshape(1, 3, 1, 1)
         self.std = torch.as_tensor([0.229, 0.224, 0.225], device=device).reshape(1, 3, 1, 1)
@@ -48,6 +50,13 @@ class Segnet(nn.Module):
             self.encoder = Encoder_eff(feat2d_dim, version='b4')
 
         # BEV compressor
+        if self.num_cameras is not None:
+            self.cam_compressor = nn.Sequential(
+                nn.Conv3d(feat2d_dim * self.num_cameras, feat2d_dim, kernel_size=3, padding=1, stride=1),
+                nn.InstanceNorm3d(feat2d_dim), nn.ReLU(),
+                nn.Conv3d(feat2d_dim, feat2d_dim, kernel_size=1),
+            )
+
         self.bev_compressor = nn.Sequential(
             nn.Conv2d(self.feat2d_dim * self.Z, latent_dim, kernel_size=3, padding=1),
             nn.InstanceNorm2d(latent_dim), nn.ReLU(),
@@ -140,8 +149,11 @@ class Segnet(nn.Module):
         # plt.imshow(rgb_mem[0, :, :, 0].permute(1, 2, 0).cpu())
         # plt.show()
 
-        mask_mems = (torch.abs(feat_mems) > 0).float()
-        feat_mem = utils.basic.reduce_masked_mean(feat_mems, mask_mems, dim=1)  # B, C, Z, Y, X
+        if self.num_cameras is None:
+            mask_mems = (torch.abs(feat_mems) > 0).float()
+            feat_mem = utils.basic.reduce_masked_mean(feat_mems, mask_mems, dim=1)  # B, C, Z, Y, X
+        else:
+            feat_mem = self.cam_compressor(feat_mems.flatten(1, 2))
 
         if self.rand_flip:
             self.bev_flip1_index = np.random.choice([0, 1], B).astype(bool)

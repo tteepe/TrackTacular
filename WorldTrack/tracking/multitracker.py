@@ -61,11 +61,11 @@ class BaseTrack(object):
 class STrack(BaseTrack):
     shared_kalman = KalmanFilter()
 
-    def __init__(self, tlwh, score, buffer_size=30, prev=None):
+    def __init__(self, xy, xy_prev, score, buffer_size=30):
 
         # wait activate
-        self._tlwh = np.asarray(tlwh, dtype=np.float32)
-        self._prev_ct = prev[:2]
+        self._xy = xy
+        self._xy_prev = xy_prev
         self.kalman_filter = None
         self.mean, self.covariance = None, None
         self.is_activated = False
@@ -90,28 +90,13 @@ class STrack(BaseTrack):
 
     def predict(self):
         mean_state = self.mean.copy()
-        if self.state != TrackState.Tracked:
-            mean_state[7] = 0
         self.mean, self.covariance = self.kalman_filter.predict(mean_state, self.covariance)
-
-    def previous(self):
-        self.org = self._tlwh.copy()
-        self._tlwh[:2] = self._prev_ct
-
-        return self
-
-    def original(self):
-        self._tlwh = self.org.copy()
-        return self
 
     @staticmethod
     def multi_predict(stracks):
         if len(stracks) > 0:
             multi_mean = np.asarray([st.mean.copy() for st in stracks])
             multi_covariance = np.asarray([st.covariance for st in stracks])
-            for i, st in enumerate(stracks):
-                if st.state != TrackState.Tracked:
-                    multi_mean[i][7] = 0
             multi_mean, multi_covariance = STrack.shared_kalman.multi_predict(multi_mean, multi_covariance)
             for i, (mean, cov) in enumerate(zip(multi_mean, multi_covariance)):
                 stracks[i].mean = mean
@@ -121,7 +106,7 @@ class STrack(BaseTrack):
         """Start a new tracklet"""
         self.kalman_filter = kalman_filter
         self.track_id = self.next_id()
-        self.mean, self.covariance = self.kalman_filter.initiate(self.tlwh_to_xyah(self._tlwh))
+        self.mean, self.covariance = self.kalman_filter.initiate(self.xy)
 
         self.tracklet_len = 0
         self.state = TrackState.Tracked
@@ -133,7 +118,7 @@ class STrack(BaseTrack):
 
     def re_activate(self, new_track, frame_id, new_id=False):
         self.mean, self.covariance = self.kalman_filter.update(
-            self.mean, self.covariance, self.tlwh_to_xyah(new_track.tlwh)
+            self.mean, self.covariance, new_track.xy
         )
 
         # self.update_features(new_track.curr_feat)
@@ -155,9 +140,7 @@ class STrack(BaseTrack):
         self.frame_id = frame_id
         self.tracklet_len += 1
 
-        new_tlwh = new_track.tlwh
-        self.mean, self.covariance = self.kalman_filter.update(
-            self.mean, self.covariance, self.tlwh_to_xyah(new_tlwh))
+        self.mean, self.covariance = self.kalman_filter.update(self.mean, self.covariance, new_track.xy)
         self.state = TrackState.Tracked
         self.is_activated = True
 
@@ -166,56 +149,22 @@ class STrack(BaseTrack):
             self.update_features(new_track.curr_feat)
 
     @property
-    def tlwh(self):
-        """Get current position in bounding box format `(top left x, top left y,
-                width, height)`.
-        """
+    def xy(self):
+        # if self.state == TrackState.Lost:
+        #     return self.mean[:2]
         if self.mean is None:
-            return self._tlwh.copy()
-        ret = self.mean[:4].copy()
-        ret[2] *= ret[3]
-        ret[:2] -= ret[2:] / 2
-        return ret
+            return self._xy
+        return self.mean[:2]
 
     @property
-    def tlbr(self):
-        """Convert bounding box to format `(min x, min y, max x, max y)`, i.e.,
-        `(top left, bottom right)`.
-        """
-        ret = self.tlwh.copy()
-        ret[2:] += ret[:2]
-        return ret
-
-    @staticmethod
-    def tlwh_to_xyah(tlwh):
-        """Convert bounding box to format `(center x, center y, aspect ratio,
-        height)`, where the aspect ratio is `width / height`.
-        """
-        ret = np.asarray(tlwh).copy()
-        ret[:2] += ret[2:] / 2
-        ret[2] /= ret[3]
-        return ret
-
-    def to_xyah(self):
-        return self.tlwh_to_xyah(self.tlwh)
-
-    @staticmethod
-    def tlbr_to_tlwh(tlbr):
-        ret = np.asarray(tlbr).copy()
-        ret[2:] -= ret[:2]
-        return ret
-
-    @staticmethod
-    def tlwh_to_tlbr(tlwh):
-        ret = np.asarray(tlwh).copy()
-        ret[2:] += ret[:2]
-        return ret
+    def xy_prev(self):
+        return self._xy_prev
 
     def __repr__(self):
         return 'OT_{}_({}-{})'.format(self.track_id, self.start_frame, self.end_frame)
 
 
-class JDETracker(object):
+class JDETracker:
     def __init__(self, conf_thres=0.1, track_buffer=5):
         self.tracked_stracks: List[STrack] = []
         self.lost_stracks: List[STrack] = []
@@ -227,7 +176,7 @@ class JDETracker(object):
 
         self.kalman_filter = KalmanFilter()
 
-    def update(self, dets, score, dets_prev):
+    def update(self, dets, dets_prev, score):
         self.frame_id += 1
         activated_starcks = []
         refind_stracks = []
@@ -241,8 +190,8 @@ class JDETracker(object):
 
         if len(dets) > 0:
             """Detections"""
-            detections = [STrack(tlwhs[:4], s, self.max_time_lost, prev=prev) for
-                          (tlwhs, s, prev) in zip(dets, score, dets_prev[:, :2])]
+            detections = [STrack(xy, xy_prev, s, self.max_time_lost) for
+                          (xy, xy_prev, s) in zip(dets, dets_prev, score)]
         else:
             detections = []
 
@@ -260,13 +209,15 @@ class JDETracker(object):
         # Predict the current location with KF
         STrack.multi_predict(strack_pool)
 
-        detections = [det.previous() for det in detections]
-        dists = matching.center_distance(strack_pool, detections)
-        matches, u_track, u_detection = matching.linear_assignment(dists, thresh=50)
+        strack_pool_xy = [track.xy for track in strack_pool]
+        detections_xy_prev = [det.xy_prev for det in detections]
+
+        dists = matching.center_distance(strack_pool_xy, detections_xy_prev)
+        matches, u_track, u_detection = matching.linear_assignment(dists, thresh=75)
 
         for itracked, idet in matches:
             track = strack_pool[itracked]
-            det = detections[idet].original()
+            det = detections[idet]
             if track.state == TrackState.Tracked:
                 track.update(det, self.frame_id)
                 activated_starcks.append(track)
@@ -281,12 +232,14 @@ class JDETracker(object):
                 lost_stracks.append(track)
 
         '''Deal with unconfirmed tracks, usually tracks with only one beginning frame'''
-        detections = [detections[i].previous() for i in u_detection]
+        detections = [detections[i] for i in u_detection]
+        detections_xy = [det.xy_prev for det in detections]
+        unconfirmed_xy = [track.xy for track in unconfirmed]
         # dists = matching.iou_distance(unconfirmed, detections)
-        dists = matching.center_distance(unconfirmed, detections)
+        dists = matching.center_distance(unconfirmed_xy, detections_xy)
         matches, u_unconfirmed, u_detection = matching.linear_assignment(dists, thresh=100)
         for itracked, idet in matches:
-            unconfirmed[itracked].update(detections[idet].original(), self.frame_id)
+            unconfirmed[itracked].update(detections[idet], self.frame_id)
             activated_starcks.append(unconfirmed[itracked])
         for it in u_unconfirmed:
             track = unconfirmed[it]
@@ -352,8 +305,9 @@ def sub_stracks(tlista, tlistb):
 
 
 def remove_duplicate_stracks(stracksa, stracksb):
-    # pdist = matching.iou_distance(stracksa, stracksb)
-    pdist = matching.center_distance(stracksa, stracksb)
+    track_a = [t.xy_prev for t in stracksa]
+    track_b = [t.xy for t in stracksb]
+    pdist = matching.center_distance(track_a, track_b)
     pairs = np.where(pdist < 6)
     dupa, dupb = list(), list()
     for p, q in zip(*pairs):

@@ -15,6 +15,7 @@ class Liftnet(nn.Module):
                  D,
                  DMIN=2.0,
                  num_classes=None,
+                 num_cameras=None,
                  do_rgbcompress=True,
                  rand_flip=False,
                  latent_dim=256,
@@ -32,6 +33,7 @@ class Liftnet(nn.Module):
         self.rand_flip = rand_flip
         self.latent_dim = latent_dim
         self.encoder_type = encoder_type
+        self.num_cameras = num_cameras
         self.z_sign = z_sign
 
         self.mean = torch.as_tensor([0.485, 0.456, 0.406]).reshape(1, 3, 1, 1).float().cuda()
@@ -54,6 +56,13 @@ class Liftnet(nn.Module):
             self.encoder = Encoder_eff(feat2d_dim + self.D, version='b4')
 
         # BEV compressor
+        if self.num_cameras is not None:
+            self.cam_compressor = nn.Sequential(
+                nn.Conv3d(feat2d_dim * self.num_cameras, feat2d_dim, kernel_size=3, padding=1, stride=1),
+                nn.InstanceNorm3d(feat2d_dim), nn.ReLU(),
+                nn.Conv3d(feat2d_dim, feat2d_dim, kernel_size=1),
+            )
+
         self.bev_compressor = nn.Sequential(
             nn.Conv2d(self.feat2d_dim * self.Z, latent_dim, kernel_size=3, padding=1),
             nn.InstanceNorm2d(latent_dim), nn.ReLU(),
@@ -167,14 +176,17 @@ class Liftnet(nn.Module):
             cams_T_ref_, Y, Z, X, self.DMIN, self.DMAX+self.DMIN, z_sign=self.z_sign)
         feat_mems = __u(feat_mems_)
 
-        one_mems_ = vox_util.warp_tiled_to_mem(
-            torch.ones_like(feat_tileXs_),
-            utils.basic.matmul2(featpix_T_cams_, cams_T_ref_),
-            cams_T_ref_, Y, Z, X, self.DMIN, self.DMAX+self.DMIN, z_sign=self.z_sign)
-        one_mems = __u(one_mems_)
-        one_mems = one_mems.clamp(min=1.0)
+        if self.num_cameras is None:
+            one_mems_ = vox_util.warp_tiled_to_mem(
+                torch.ones_like(feat_tileXs_),
+                utils.basic.matmul2(featpix_T_cams_, cams_T_ref_),
+                cams_T_ref_, Y, Z, X, self.DMIN, self.DMAX+self.DMIN, z_sign=self.z_sign)
+            one_mems = __u(one_mems_)
+            one_mems = one_mems.clamp(min=1.0)
 
-        feat_mem = utils.basic.reduce_masked_mean(feat_mems, one_mems, dim=1)  # B, C, Y, Z, X
+            feat_mem = utils.basic.reduce_masked_mean(feat_mems, one_mems, dim=1)  # B, C, Y, Z, X
+        else:
+            feat_mem = self.cam_compressor(feat_mems.flatten(1, 2))
 
         if self.rand_flip:
             self.bev_flip1_index = np.random.choice([0, 1], B).astype(bool)

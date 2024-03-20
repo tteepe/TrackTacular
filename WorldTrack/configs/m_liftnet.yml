@@ -1,2 +1,6 @@
 model:
   model_name: liftnet
+  feat2d_dim: 96
+data:
+  init_args:
+    accumulate_grad_batches: 16

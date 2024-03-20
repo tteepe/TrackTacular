@@ -2,14 +2,11 @@ import glob
 import json
 import os.path as osp
 from typing import Any
-import cv2
 import numpy as np
 import torch
 import random
 from PIL import Image
-from einops import rearrange
 from torchvision.datasets import VisionDataset
-from torchvision.transforms import transforms
 from torchvision.transforms import functional as F
 
 from utils import geom, vox, basic
@@ -164,8 +161,8 @@ class SynthehicleDataset(VisionDataset):
             pids.append(pid_img)
             valids.append(valid_img)
 
-        return torch.stack(imgs), torch.stack(rots), torch.stack(trans), torch.stack(intrins), torch.stack(centers), \
-                  torch.stack(offsets), torch.stack(sizes), torch.stack(pids), torch.stack(valids)
+        return (torch.stack(imgs), torch.stack(rots), torch.stack(trans), torch.stack(intrins), torch.stack(centers),
+                torch.stack(offsets), torch.stack(sizes), torch.stack(pids), torch.stack(valids))
 
     def sample_augmentation(self):
         fH, fW = self.data_aug_conf['final_dim']

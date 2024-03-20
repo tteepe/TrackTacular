@@ -7,5 +7,6 @@ model:
   bounds: [0, 1440, 0, 480, 0, 200]  # xmin,xmax,ymin,ymax,zmin,zmax
   depth: [32, 250, 3250]
   num_cameras: 7
+  use_temporal_cache: False
 trainer:
   max_epochs: 30

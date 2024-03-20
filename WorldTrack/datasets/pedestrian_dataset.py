@@ -7,7 +7,6 @@ import numpy as np
 from torchvision.datasets import VisionDataset
 import torchvision.transforms.functional as F
 from PIL import Image
-import imgaug.augmenters as iaa
 
 from utils import geom, basic, vox
 
@@ -177,16 +176,16 @@ class PedestrianDataset(VisionDataset):
         head_pts = torch.tensor(head_pts, dtype=torch.float32)
 
         for pt_idx, (pid, wh) in enumerate(zip(img_pids, size_pts)):
-            for idx, pt in enumerate((center_pts[pt_idx], )):  # , foot_pts[pt_idx], head_pts[pt_idx])):
+            for idx, pt in enumerate((foot_pts[pt_idx], )):  # , center_pts[pt_idx], head_pts[pt_idx])):
                 if pt[0] < 0 or pt[0] >= W or pt[1] < 0 or pt[1] >= H:
                     continue
                 basic.draw_umich_gaussian(center[idx], pt.int(), self.kernel_size)
 
-            ct_int = center_pts[pt_idx].int()
+            ct_int = foot_pts[pt_idx].int()
             if ct_int[0] < 0 or ct_int[0] >= W or ct_int[1] < 0 or ct_int[1] >= H:
                 continue
             valid_mask[:, ct_int[1], ct_int[0]] = 1
-            offset[:, ct_int[1], ct_int[0]] = center_pts[pt_idx] - ct_int
+            offset[:, ct_int[1], ct_int[0]] = foot_pts[pt_idx] - ct_int
             size[:, ct_int[1], ct_int[0]] = wh
             person_ids[:, ct_int[1], ct_int[0]] = pid
 
@@ -222,7 +221,6 @@ class PedestrianDataset(VisionDataset):
         for cam in cameras:
             img = Image.open(self.img_fpaths[cam][frame]).convert('RGB')
             W, H = img.size
-
 
             resize_dims, crop = self.sample_augmentation()
             sx = resize_dims[0] / float(W)
@@ -278,8 +276,7 @@ class PedestrianDataset(VisionDataset):
         worldgrid_pts_org, world_pids = self.world_gt[frame]
         worldgrid_pts_pre, world_pid_pre = self.world_gt[pre_frame]
 
-        worldgrid_pts = torch.cat(
-            (worldgrid_pts_org, torch.zeros_like(worldgrid_pts_org[:, 0:1])), dim=1).unsqueeze(0)
+        worldgrid_pts = torch.cat((worldgrid_pts_org, torch.zeros_like(worldgrid_pts_org[:, 0:1])), dim=1).unsqueeze(0)
         worldgrid_pts_pre = torch.cat((worldgrid_pts_pre, torch.zeros_like(worldgrid_pts_pre[:, 0:1])), dim=1)
 
         if self.is_train:
